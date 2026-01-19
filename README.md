@@ -14,4 +14,4 @@ go test ./vfs -race -timeout 30s
 go test ./vfs -bench=. -benchtime=3s -timeout 60s
 
 # 5. 查看最终覆盖率
-go tool cover -func=final_coverage.out
+go tool cover -func=final_coverage.out | tail -5
