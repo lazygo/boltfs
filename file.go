@@ -26,45 +26,20 @@ type BoltFile struct {
 	dirty      bool
 	closed     bool
 	mu         sync.RWMutex
-
-	// 文件级锁管理
-	fileLock      *FileLock
-	isWriteLocked bool
-	lockAcquired  bool // 标记是否已获取锁
-
-	// 添加升级标记
-	lockUpgraded bool // 标记锁是否被升级过
 }
 
 // newBoltFile 创建新文件对象
 func newBoltFile(fs *BoltFS, name string, meta *FileMetadata, flag int) *BoltFile {
 	return &BoltFile{
-		fs:           fs,
-		name:         name,
-		metadata:     meta,
-		flag:         flag,
-		readOffset:   0,
-		writeBuf:     bytes.NewBuffer(nil),
-		dirty:        false,
-		closed:       false,
-		lockAcquired: false,
+		fs:         fs,
+		name:       name,
+		metadata:   meta,
+		flag:       flag,
+		readOffset: 0,
+		writeBuf:   bytes.NewBuffer(nil),
+		dirty:      false,
+		closed:     false,
 	}
-}
-
-// tryUpgradeLockForWrite 尝试为写入操作升级锁
-func (f *BoltFile) tryUpgradeLockForWrite() bool {
-	if f.isWriteLocked || f.fileLock == nil || !f.lockAcquired {
-		return f.isWriteLocked // 已经是写锁或未获取锁
-	}
-
-	// 尝试升级锁
-	if f.fileLock.safeUpgradeLock() {
-		f.isWriteLocked = true
-		f.lockUpgraded = true
-		return true
-	}
-
-	return false
 }
 
 // Read 读取文件
@@ -231,13 +206,6 @@ func (f *BoltFile) Write(p []byte) (n int, err error) {
 		return 0, errors.New("is a directory")
 	}
 
-	// 如果当前是读锁，尝试升级为写锁
-	if !f.isWriteLocked {
-		if !f.tryUpgradeLockForWrite() {
-			return 0, errors.New("cannot acquire write lock")
-		}
-	}
-
 	// 如果是追加模式，移动到文件末尾
 	if f.flag&os.O_APPEND != 0 {
 		f.readOffset = f.metadata.Size
@@ -285,13 +253,6 @@ func (f *BoltFile) WriteAt(p []byte, off int64) (n int, err error) {
 
 	if off < 0 {
 		return 0, ErrInvalidSeek
-	}
-
-	// 如果当前是读锁，尝试升级为写锁
-	if !f.isWriteLocked {
-		if !f.tryUpgradeLockForWrite() {
-			return 0, errors.New("cannot acquire write lock")
-		}
 	}
 
 	// 如果有未保存的写入，先刷新
@@ -500,15 +461,6 @@ func (f *BoltFile) Close() error {
 	// 刷新未保存的数据
 	if f.dirty {
 		if err := f.flush(); err != nil {
-			// 刷新失败，但仍然要释放锁
-			if f.lockAcquired {
-				// 安全检查：检查文件系统是否已关闭
-				f.fs.mu.RLock()
-				if !f.fs.closed && f.fileLock != nil {
-					f.fs.releaseFileLock(f.fileLock, f.isWriteLocked)
-				}
-				f.fs.mu.RUnlock()
-			}
 			f.closed = true
 			f.writeBuf = nil
 			return err
@@ -517,24 +469,6 @@ func (f *BoltFile) Close() error {
 
 	f.closed = true
 	f.writeBuf = nil
-
-	// 释放文件锁
-	if f.lockAcquired {
-		// 安全检查：检查文件系统是否已关闭
-		f.fs.mu.RLock()
-		defer f.fs.mu.RUnlock()
-
-		if !f.fs.closed && f.fileLock != nil {
-			// 如果锁被升级过，我们需要特殊处理
-			if f.lockUpgraded && f.isWriteLocked {
-				// 升级后的锁需要释放写锁
-				f.fs.releaseFileLock(f.fileLock, true)
-			} else {
-				f.fs.releaseFileLock(f.fileLock, f.isWriteLocked)
-			}
-			f.lockAcquired = false
-		}
-	}
 
 	return nil
 }

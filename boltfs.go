@@ -29,8 +29,8 @@ type BoltFS struct {
 	cacheMutex    sync.RWMutex
 
 	// 文件级读写锁（带引用计数）
-	fileLocks     map[string]*FileLock
-	fileLockMutex sync.RWMutex
+	// fileLocks     map[string]*FileLock
+	// fileLockMutex sync.RWMutex
 }
 
 // 错误定义
@@ -57,7 +57,7 @@ func NewBoltFS(dbPath string, readOnly bool) (*BoltFS, error) {
 		readOnly:      readOnly,
 		metadataCache: make(map[string]*FileMetadata),
 		dirCache:      make(map[string][]*FileMetadata),
-		fileLocks:     make(map[string]*FileLock),
+		// fileLocks:     make(map[string]*FileLock),
 	}
 
 	if !readOnly {
@@ -70,50 +70,55 @@ func NewBoltFS(dbPath string, readOnly bool) (*BoltFS, error) {
 	return fs, nil
 }
 
-func (fs *BoltFS) acquireFileLock(path string, write bool) *FileLock {
-	cleanPath := fs.normalizePath(path)
+// func (fs *BoltFS) acquireFileLock(path string, write bool) *FileLock {
+// 	cleanPath := fs.normalizePath(path)
 
-	fs.fileLockMutex.Lock()
-	defer fs.fileLockMutex.Unlock()
+// 	_, file, line, _ := runtime.Caller(1)
+// 	id := rand.Int() % 1000
+// 	fmt.Println("_+__+_+_+_+_+", id, file, line, path)
 
-	// 检查是否已存在
-	lock, exists := fs.fileLocks[cleanPath]
-	if !exists {
-		lock = newFileLock(cleanPath, fs)
-		fs.fileLocks[cleanPath] = lock
-	}
+// 	fs.fileLockMutex.Lock()
+// 	fmt.Println("_+__+_+_+_+_+ok", id, file, line, path)
+// 	defer fs.fileLockMutex.Unlock()
 
-	// 根据模式获取锁
-	if write {
-		lock.acquireWrite()
-	} else {
-		lock.acquireRead()
-	}
+// 	// 检查是否已存在
+// 	lock, exists := fs.fileLocks[cleanPath]
+// 	if !exists {
+// 		lock = newFileLock(cleanPath, fs)
+// 		fs.fileLocks[cleanPath] = lock
+// 	}
 
-	return lock
-}
+// 	// 根据模式获取锁
+// 	if write {
+// 		lock.acquireWrite()
+// 	} else {
+// 		lock.acquireRead()
+// 	}
+
+// 	return lock
+// }
 
 // releaseFileLock 释放文件锁
-func (fs *BoltFS) releaseFileLock(lock *FileLock, write bool) {
-	needCleanup := false
+// func (fs *BoltFS) releaseFileLock(lock *FileLock, write bool) {
+// 	needCleanup := false
 
-	if write {
-		needCleanup = lock.releaseWrite()
-	} else {
-		needCleanup = lock.releaseRead()
-	}
+// 	if write {
+// 		needCleanup = lock.releaseWrite()
+// 	} else {
+// 		needCleanup = lock.releaseRead()
+// 	}
 
-	// 如果引用计数为0，清理锁
-	if needCleanup {
-		fs.fileLockMutex.Lock()
-		defer fs.fileLockMutex.Unlock()
+// 	// 如果引用计数为0，清理锁
+// 	if needCleanup {
+// 		fs.fileLockMutex.Lock()
+// 		defer fs.fileLockMutex.Unlock()
 
-		// 再次检查引用计数（避免竞态条件）
-		if lock.getRefCount() == 0 {
-			delete(fs.fileLocks, lock.path)
-		}
-	}
-}
+// 		// 再次检查引用计数（避免竞态条件）
+// 		if lock.getRefCount() == 0 {
+// 			delete(fs.fileLocks, lock.path)
+// 		}
+// 	}
+// }
 
 // initializeDB 初始化数据库结构
 func (fs *BoltFS) initializeDB() error {
@@ -164,9 +169,9 @@ func (fs *BoltFS) Close() error {
 	fs.cacheMutex.Unlock()
 
 	// 清理文件锁
-	fs.fileLockMutex.Lock()
-	fs.fileLocks = make(map[string]*FileLock)
-	fs.fileLockMutex.Unlock()
+	// fs.fileLockMutex.Lock()
+	// fs.fileLocks = make(map[string]*FileLock)
+	// fs.fileLockMutex.Unlock()
 
 	return fs.db.Close()
 }
@@ -201,33 +206,25 @@ func (fs *BoltFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 		return nil, errors.New("read-only file system")
 	}
 
-	// 获取文件锁
-	var fileLock *FileLock
-	if isWriteMode {
-		fileLock = fs.acquireFileLock(cleanName, true) // 写锁
-	} else {
-		fileLock = fs.acquireFileLock(cleanName, false) // 读锁
-	}
-
 	// 检查文件是否存在
 	meta, err := fs.getMetadata(cleanName)
 	if err != nil && err != os.ErrNotExist {
 		// 获取元数据失败，释放锁
-		fs.releaseFileLock(fileLock, isWriteMode)
+		// fs.releaseFileLock(fileLock, isWriteMode)
 		return nil, err
 	}
 
 	// 文件不存在
 	if meta == nil {
 		if flag&os.O_CREATE == 0 {
-			fs.releaseFileLock(fileLock, isWriteMode)
+			// fs.releaseFileLock(fileLock, isWriteMode)
 			return nil, os.ErrNotExist
 		}
 
 		// 创建新文件
-		file, err := fs.createFileWithLock(cleanName, flag, perm, fileLock, isWriteMode)
+		file, err := fs.createFile(cleanName, flag, perm)
 		if err != nil {
-			fs.releaseFileLock(fileLock, isWriteMode)
+			// fs.releaseFileLock(fileLock, isWriteMode)
 			return nil, err
 		}
 		return file, nil
@@ -236,33 +233,19 @@ func (fs *BoltFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 	// 文件存在
 	if meta.IsDir {
 		if flag&os.O_CREATE != 0 && flag&os.O_EXCL != 0 {
-			fs.releaseFileLock(fileLock, isWriteMode)
+			// fs.releaseFileLock(fileLock, isWriteMode)
 			return nil, os.ErrExist
 		}
 
-		// 目录文件：如果需要写入，确保是写锁
-		if isWriteMode && fileLock.getRefCount() == 1 {
-			// 尝试安全升级锁
-			if fileLock.safeUpgradeLock() {
-				isWriteMode = true // 升级成功
-			} else {
-				// 升级失败，释放读锁，重新获取写锁
-				fs.releaseFileLock(fileLock, false)
-				fileLock = fs.acquireFileLock(cleanName, true)
-				isWriteMode = true
-			}
-		}
-
 		file := newBoltFile(fs, cleanName, meta, flag)
-		file.fileLock = fileLock
-		file.isWriteLocked = isWriteMode
-		file.lockAcquired = true
+		// file.fileLock = fileLock
+		// file.isWriteLocked = isWriteMode
+		// file.lockAcquired = true
 		return file, nil
 	}
 
 	// 普通文件
 	if flag&os.O_EXCL != 0 && flag&os.O_CREATE != 0 {
-		fs.releaseFileLock(fileLock, isWriteMode)
 		return nil, os.ErrExist
 	}
 
@@ -275,30 +258,18 @@ func (fs *BoltFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 
 		// 需要确保是写锁
 		if !isWriteMode {
-			// 尝试安全升级锁
-			if fileLock.getRefCount() == 1 && fileLock.safeUpgradeLock() {
-				isWriteMode = true
-			} else {
-				// 升级失败，释放读锁，重新获取写锁
-				fs.releaseFileLock(fileLock, false)
-				fileLock = fs.acquireFileLock(cleanName, true)
-				isWriteMode = true
-			}
+			isWriteMode = true
 		}
 
 		err := fs.db.Update(func(tx *bolt.Tx) error {
 			return fs.saveMetadata(tx, meta)
 		})
 		if err != nil {
-			fs.releaseFileLock(fileLock, isWriteMode)
 			return nil, err
 		}
 	}
 
 	file := newBoltFile(fs, cleanName, meta, flag)
-	file.fileLock = fileLock
-	file.isWriteLocked = isWriteMode
-	file.lockAcquired = true
 
 	// 追加模式
 	if flag&os.O_APPEND != 0 {
@@ -310,11 +281,6 @@ func (fs *BoltFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 
 // createFile 创建新文件
 func (fs *BoltFS) createFile(name string, flag int, perm os.FileMode) (*BoltFile, error) {
-	return fs.createFileWithLock(name, flag, perm, nil, false)
-}
-
-// createFileWithLock 创建新文件（带锁管理）
-func (fs *BoltFS) createFileWithLock(name string, flag int, perm os.FileMode, fileLock *FileLock, isWriteLocked bool) (*BoltFile, error) {
 	cleanName := fs.normalizePath(name)
 	parentDir := filepath.Dir(cleanName)
 
@@ -352,9 +318,6 @@ func (fs *BoltFS) createFileWithLock(name string, flag int, perm os.FileMode, fi
 	}
 
 	file := newBoltFile(fs, cleanName, meta, flag)
-	file.fileLock = fileLock
-	file.isWriteLocked = isWriteLocked
-	file.lockAcquired = true
 	return file, nil
 }
 
@@ -616,20 +579,6 @@ func (fs *BoltFS) Rename(oldname, newname string) error {
 	// 注意：需要按固定顺序获取锁以避免死锁
 	paths := []string{oldPath, newPath}
 	sort.Strings(paths)
-
-	var locks []*FileLock
-	defer func() {
-		// 确保释放所有锁
-		for _, lock := range locks {
-			fs.releaseFileLock(lock, true)
-		}
-	}()
-
-	// 获取所有需要的锁
-	for _, path := range paths {
-		lock := fs.acquireFileLock(path, true)
-		locks = append(locks, lock)
-	}
 
 	return fs.db.Update(func(tx *bolt.Tx) error {
 		return fs.renameInternal(tx, oldPath, newPath)

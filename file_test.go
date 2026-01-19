@@ -8,23 +8,6 @@ import (
 )
 
 func TestBoltFileEdgeCases(t *testing.T) {
-	t.Run("tryUpgradeLockForWrite", func(t *testing.T) {
-		fs, cleanup := createTestFS(t, false)
-		defer cleanup()
-
-		// 创建文件
-		f, err := fs.Create("/upgrade_test.txt")
-		assertNoError(t, err)
-
-		// 由于当前已经是写锁，尝试升级应该返回true
-		boltFile := f.(*BoltFile)
-		upgraded := boltFile.tryUpgradeLockForWrite()
-		if !upgraded {
-			t.Error("期望升级成功，但失败")
-		}
-
-		f.Close()
-	})
 
 	t.Run("Stat方法", func(t *testing.T) {
 		fs, cleanup := createTestFS(t, false)
